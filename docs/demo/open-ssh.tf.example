@@ -1,0 +1,10 @@
+# Demo only. Copy to infra/envs/dev/demo.tf on a branch and open a PR.
+# Expected: NET-001 denies the plan, and Checkov's open-SSH check fails too.
+resource "aws_vpc_security_group_ingress_rule" "debug_ssh" {
+  security_group_id = module.compute.security_group_id
+  description       = "Temporary SSH for debugging"
+  cidr_ipv4         = "0.0.0.0/0"
+  ip_protocol       = "tcp"
+  from_port         = 22
+  to_port           = 22
+}

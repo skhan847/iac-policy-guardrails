@@ -1,0 +1,206 @@
+{
+  "format_version": "1.2",
+  "terraform_version": "1.16.4",
+  "variables": {
+    "aws_region": {
+      "value": "us-east-2"
+    }
+  },
+  "resource_changes": [
+    {
+      "address": "aws_security_group.bastion",
+      "mode": "managed",
+      "type": "aws_security_group",
+      "name": "bastion",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "bastion",
+          "tags_all": {
+            "environment": "dev"
+          },
+          "ingress": [
+            {
+              "cidr_blocks": [
+                "0.0.0.0/0"
+              ],
+              "ipv6_cidr_blocks": [],
+              "protocol": "tcp",
+              "from_port": 22,
+              "to_port": 22,
+              "description": "ssh"
+            }
+          ]
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket.uploads",
+      "mode": "managed",
+      "type": "aws_s3_bucket",
+      "name": "uploads",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "bucket": "my-uploads",
+          "tags_all": {
+            "owner": "change-me",
+            "environment": "dev",
+            "data-classification": "internal",
+            "project": "iac-guardrails",
+            "managed-by": "terraform"
+          }
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_s3_bucket_acl.uploads",
+      "mode": "managed",
+      "type": "aws_s3_bucket_acl",
+      "name": "uploads",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "acl": "public-read"
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_db_instance.legacy",
+      "mode": "managed",
+      "type": "aws_db_instance",
+      "name": "legacy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "identifier": "legacy",
+          "instance_class": "db.r6g.2xlarge",
+          "publicly_accessible": true,
+          "storage_encrypted": false,
+          "deletion_protection": false,
+          "backup_retention_period": 0,
+          "tags_all": {
+            "owner": "change-me",
+            "environment": "dev",
+            "data-classification": "internal",
+            "project": "iac-guardrails",
+            "managed-by": "terraform"
+          }
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_instance.worker",
+      "mode": "managed",
+      "type": "aws_instance",
+      "name": "worker",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "instance_type": "m5.4xlarge",
+          "associate_public_ip_address": true,
+          "metadata_options": [
+            {
+              "http_endpoint": "enabled",
+              "http_tokens": "optional"
+            }
+          ],
+          "root_block_device": [
+            {
+              "encrypted": false
+            }
+          ],
+          "tags_all": {
+            "owner": "change-me",
+            "environment": "dev",
+            "data-classification": "internal",
+            "project": "iac-guardrails",
+            "managed-by": "terraform"
+          }
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_iam_policy.deploy",
+      "mode": "managed",
+      "type": "aws_iam_policy",
+      "name": "deploy",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "name": "deploy",
+          "policy": "{\"Version\": \"2012-10-17\", \"Statement\": [{\"Effect\": \"Allow\", \"Action\": \"*\", \"Resource\": \"*\"}]}",
+          "tags_all": {
+            "owner": "change-me",
+            "environment": "dev",
+            "data-classification": "internal",
+            "project": "iac-guardrails",
+            "managed-by": "terraform"
+          }
+        },
+        "after_unknown": {}
+      }
+    },
+    {
+      "address": "aws_iam_access_key.ci",
+      "mode": "managed",
+      "type": "aws_iam_access_key",
+      "name": "ci",
+      "provider_name": "registry.terraform.io/hashicorp/aws",
+      "change": {
+        "actions": [
+          "create"
+        ],
+        "before": null,
+        "after": {
+          "user": "ci-bot"
+        },
+        "after_unknown": {}
+      }
+    }
+  ],
+  "configuration": {
+    "provider_config": {
+      "aws": {
+        "name": "aws",
+        "full_name": "registry.terraform.io/hashicorp/aws",
+        "expressions": {
+          "region": {
+            "references": [
+              "var.aws_region"
+            ]
+          }
+        }
+      }
+    }
+  }
+}

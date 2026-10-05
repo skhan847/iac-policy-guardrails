@@ -1,0 +1,8 @@
+# Replace with your GitHub username (and your reviewer's).
+# With "Require review from Code Owners" enabled in branch protection, nobody
+# can weaken a policy, add an exception or change the pipeline without review.
+*                       @your-github-username
+/policies/              @your-github-username
+/policies/data/         @your-github-username
+/.github/               @your-github-username
+/bootstrap/             @your-github-username

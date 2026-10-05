@@ -1,0 +1,37 @@
+name: Set up Terraform and Conftest
+description: Installs pinned versions of Terraform and Conftest (checksum-verified).
+
+inputs:
+  terraform-version:
+    description: Terraform version
+    default: "1.16.4"
+  conftest-version:
+    description: Conftest version
+    default: "0.71.0"
+  conftest-sha256:
+    description: SHA-256 of conftest_<version>_Linux_x86_64.tar.gz (from the release's checksums.txt)
+    default: "765dfefdf0730693d7541ea0147e10d530a54ed257bbfec055ff34c837ffdf72"
+
+runs:
+  using: composite
+  steps:
+    - uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: ${{ inputs.terraform-version }}
+        # The wrapper rewrites stdout, which corrupts `terraform show -json > plan.json`.
+        terraform_wrapper: false
+
+    - name: Install Conftest
+      shell: bash
+      env:
+        VERSION: ${{ inputs.conftest-version }}
+        SHA256: ${{ inputs.conftest-sha256 }}
+      run: |
+        set -euo pipefail
+        archive="conftest_${VERSION}_Linux_x86_64.tar.gz"
+        curl -fsSL -o "$RUNNER_TEMP/$archive" \
+          "https://github.com/open-policy-agent/conftest/releases/download/v${VERSION}/${archive}"
+        echo "${SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+        tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" conftest
+        sudo install -m 0755 "$RUNNER_TEMP/conftest" /usr/local/bin/conftest
+        conftest --version

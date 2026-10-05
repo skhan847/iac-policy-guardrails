@@ -1,0 +1,167 @@
+name: PR checks
+
+on:
+  pull_request:
+    branches: [main]
+
+# Least privilege by default; jobs opt in to what they need.
+permissions:
+  contents: read
+
+concurrency:
+  group: pr-checks-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: infra/envs/dev
+  TFLINT_VERSION: v0.64.0
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  static-analysis:
+    name: Format, lint, scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # full history for secret scanning
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-tools
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform validate (every root and module)
+        run: |
+          for dir in bootstrap infra/envs/* infra/modules/*; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false >/dev/null
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v6
+        with:
+          tflint_version: ${{ env.TFLINT_VERSION }}
+
+      - name: TFLint
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # avoids rate limits when downloading the AWS ruleset
+        run: |
+          tflint --init --config "$GITHUB_WORKSPACE/.tflint.hcl"
+          tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl" --format compact
+
+      - name: Checkov
+        run: |
+          pipx install "checkov>=3.2,<4"
+          checkov --config-file .checkov.yaml
+
+      - name: Gitleaks
+        run: |
+          set -euo pipefail
+          archive="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSL -o "$RUNNER_TEMP/$archive" \
+            "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/${archive}"
+          echo "${GITLEAKS_SHA256}  $RUNNER_TEMP/$archive" | sha256sum --check --strict
+          tar -xzf "$RUNNER_TEMP/$archive" -C "$RUNNER_TEMP" gitleaks
+          "$RUNNER_TEMP/gitleaks" git --redact --verbose .
+
+  policy-tests:
+    name: Policy unit tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-tools
+
+      - name: Rego unit tests
+        run: conftest verify --policy policies --data policies/data --show-builtin-errors
+
+      - name: Regression - secure fixture passes
+        run: conftest test policies/fixtures/secure-plan.json --policy policies/terraform --data policies/data
+
+      - name: Regression - insecure fixture is denied
+        run: |
+          if conftest test policies/fixtures/insecure-plan.json --policy policies/terraform --data policies/data; then
+            echo "::error::The insecure fixture passed. A policy has stopped detecting something it should."
+            exit 1
+          fi
+
+  plan:
+    name: Plan and policy check
+    needs: [static-analysis, policy-tests]
+    # Plan even if static analysis failed, so the PR always gets a policy
+    # report; branch protection still requires every job to pass. Requires
+    # working policies, and skips forks (they get no OIDC token for our roles).
+    if: >-
+      always() &&
+      needs.policy-tests.result == 'success' &&
+      github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write # OIDC token for AWS
+      pull-requests: write # policy report comment
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-tools
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-plan-pr${{ github.event.pull_request.number }}-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: terraform plan
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform plan -input=false -lock-timeout=120s -no-color -out=tfplan | tee plan.txt
+          terraform show -json tfplan > plan.json
+
+      - name: Evaluate policies
+        id: policy
+        continue-on-error: true
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          args=(--policy "$GITHUB_WORKSPACE/policies/terraform" --data "$GITHUB_WORKSPACE/policies/data")
+          conftest test plan.json "${args[@]}" --output json > policy.json || true
+          conftest test plan.json "${args[@]}"
+
+      - name: Post policy report
+        if: always() && steps.policy.outcome != 'skipped'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const report = require(`${process.env.GITHUB_WORKSPACE}/.github/scripts/policy-comment.js`);
+            await report({
+              github,
+              context,
+              workdir: `${process.env.GITHUB_WORKSPACE}/${process.env.WORKDIR}`,
+              outcome: '${{ steps.policy.outcome }}',
+            });
+
+      - name: Enforce policy result
+        if: steps.policy.outcome == 'failure'
+        run: |
+          echo "::error::Policy violations found. See the PR comment or the 'Evaluate policies' step."
+          exit 1

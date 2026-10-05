@@ -1,0 +1,12 @@
+{
+  "exceptions": [
+    {
+      "rule": "DB-004",
+      "address": "module.database[0].aws_db_instance.this",
+      "reason": "Dev database is torn down after every demo; deletion protection would block terraform destroy.",
+      "approved_by": "course-instructor",
+      "ticket": "DEVSECOPS-12",
+      "expires": "2026-12-31T23:59:59Z"
+    }
+  ]
+}

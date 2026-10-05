@@ -1,0 +1,5 @@
+# Copy to terraform.tfvars and fill in.
+owner             = "your-name"
+github_repository = "your-github-user/iac-policy-guardrails"
+aws_region        = "us-east-2"
+# create_oidc_provider = false  # if your account already has the GitHub OIDC provider

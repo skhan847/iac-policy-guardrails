@@ -1,0 +1,140 @@
+name: Apply
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "infra/**"
+      - "policies/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Never run two applies against the same state at once, and never cancel one midway.
+concurrency:
+  group: terraform-dev
+  cancel-in-progress: false
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: infra/envs/dev
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    name: Plan and re-check policy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      has_changes: ${{ steps.plan.outputs.has_changes }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-tools
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-plan-main-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - name: terraform plan
+        id: plan
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          terraform plan -input=false -lock-timeout=120s -no-color -detailed-exitcode -out=tfplan
+          code=$?
+          set -e
+          if [ "$code" -eq 1 ]; then exit 1; fi
+          echo "has_changes=$([ "$code" -eq 2 ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
+          terraform show -json tfplan > plan.json
+
+      # Defense in depth: policies run again on main, so an admin merge or a
+      # bypassed PR check still cannot apply a non-compliant plan.
+      - name: Evaluate policies
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          conftest test plan.json \
+            --policy "$GITHUB_WORKSPACE/policies/terraform" \
+            --data "$GITHUB_WORKSPACE/policies/data"
+
+      - name: Plan summary
+        if: steps.plan.outputs.has_changes == 'true'
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform show -no-color tfplan > plan.txt
+          {
+            echo "## Terraform plan"
+            echo '```'
+            head -c 60000 plan.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # The saved plan can contain sensitive values: keep it for one day only.
+      - name: Upload plan
+        if: steps.plan.outputs.has_changes == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: tfplan
+          path: ${{ env.WORKDIR }}/tfplan
+          retention-days: 1
+          if-no-files-found: error
+
+  apply:
+    name: Apply (requires approval)
+    needs: plan
+    if: needs.plan.outputs.has_changes == 'true'
+    runs-on: ubuntu-latest
+    # Configure required reviewers on this environment in repo settings.
+    # Only jobs in this environment can assume the apply role.
+    environment: dev
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-tools
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_APPLY_ROLE_ARN }}
+          role-session-name: gha-apply-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      - uses: actions/download-artifact@v8
+        with:
+          name: tfplan
+          path: ${{ env.WORKDIR }}
+
+      # Applying the reviewed plan file (not a fresh plan) guarantees that what
+      # was approved is exactly what runs. Terraform rejects it if state moved.
+      - name: terraform apply
+        working-directory: ${{ env.WORKDIR }}
+        run: terraform apply -input=false -lock-timeout=120s -no-color tfplan

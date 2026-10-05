@@ -1,0 +1,109 @@
+name: Drift detection
+
+on:
+  schedule:
+    - cron: "17 11 * * *" # daily, around 6 AM US Central
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: terraform-dev-drift
+  cancel-in-progress: true
+
+env:
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+  WORKDIR: infra/envs/dev
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  drift:
+    name: Compare live infrastructure with main
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup-tools
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PLAN_ROLE_ARN }}
+          role-session-name: gha-drift-${{ github.run_id }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: terraform init
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          terraform init -input=false \
+            -backend-config="bucket=${{ vars.TF_STATE_BUCKET }}" \
+            -backend-config="region=${{ vars.AWS_REGION }}"
+
+      # -refresh-only reports only changes made outside Terraform (console
+      # edits, other tools), not unapplied code changes. -lock=false keeps
+      # this read-only check from blocking a real apply.
+      - name: Check for drift
+        id: drift
+        working-directory: ${{ env.WORKDIR }}
+        run: |
+          set +e
+          terraform plan -refresh-only -input=false -lock=false -no-color -detailed-exitcode > drift.txt 2>&1
+          code=$?
+          set -e
+          cat drift.txt
+          echo "exitcode=$code" >> "$GITHUB_OUTPUT"
+          if [ "$code" -eq 1 ]; then exit 1; fi
+
+      - name: Open or update drift issue
+        if: steps.drift.outputs.exitcode == '2'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const fs = require('fs');
+            const out = fs.readFileSync(`${process.env.GITHUB_WORKSPACE}/${process.env.WORKDIR}/drift.txt`, 'utf8');
+            const changed = out.split('\n').filter((l) => /^\s*# .* has (changed|been deleted)$/.test(l)).map((l) => `- \`${l.trim().slice(2)}\``);
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `Drift detected on ${new Date().toISOString().slice(0, 10)} ([run](${runUrl})).`,
+              '',
+              changed.length ? changed.join('\n') : '_See the run log for details._',
+              '',
+              'Either revert the manual change, or update the Terraform code and open a PR so it goes through policy checks.',
+              '',
+              '<details><summary>Plan output</summary>',
+              '',
+              '```',
+              out.slice(0, 50000),
+              '```',
+              '</details>',
+            ].join('\n');
+
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: 'drift' });
+            if (open.data.length) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: open.data[0].number, body });
+            } else {
+              await github.rest.issues.create({ owner, repo, title: 'Infrastructure drift detected (dev)', labels: ['drift'], body });
+            }
+
+      - name: Close drift issue when clean
+        if: steps.drift.outputs.exitcode == '0'
+        uses: actions/github-script@v9
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const open = await github.rest.issues.listForRepo({ owner, repo, state: 'open', labels: 'drift' });
+            for (const issue of open.data) {
+              await github.rest.issues.createComment({ owner, repo, issue_number: issue.number, body: 'No drift detected on the latest run. Closing.' });
+              await github.rest.issues.update({ owner, repo, issue_number: issue.number, state: 'closed', state_reason: 'completed' });
+            }

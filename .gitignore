@@ -1,0 +1,26 @@
+# Terraform
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+tfplan
+crash.log
+crash.*.log
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+backend.hcl
+*.local.tfvars
+# Keep .terraform.lock.hcl committed (pins provider versions and checksums).
+
+# Pipeline outputs
+plan.json
+plan.txt
+policy.json
+drift.txt
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store

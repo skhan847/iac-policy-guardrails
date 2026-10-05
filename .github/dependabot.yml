@@ -1,0 +1,20 @@
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directories: ["/", "/.github/actions/*"]
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directories:
+      - /bootstrap
+      - /infra/envs/*
+      - /infra/modules/*
+    schedule:
+      interval: weekly
+    groups:
+      terraform:
+        patterns: ["*"]
